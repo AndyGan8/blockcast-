@@ -4,4 +4,4 @@
 一键启动命令
 
 
-wget -O deploy_blockcast_node.sh https://raw.githubusercontent.com/Blockcast/beacon-docker-compose/main/deploy_blockcast_node.sh && sed -i 's/\r$//' deploy_blockcast_node.sh && chmod +x deploy_blockcast_node.sh && ./deploy_blockcast_node.sh
+wget -O deploy_blockcast_node.sh https://raw.githubusercontent.com/AndyGan8/blockcast-/main/deploy_blockcast_node.sh && sed -i 's/\r$//' deploy_blockcast_node.sh && chmod +x deploy_blockcast_node.sh && ./deploy_blockcast_node.sh
