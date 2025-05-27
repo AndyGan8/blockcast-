@@ -9,7 +9,7 @@ set -e
 
 # 默认配置
 WORK_DIR="${BLOCKCAST_WORK_DIR:-$HOME/blockcast-beacon}"
-COMPOSE_URL="${BLOCKCAST_COMPOSE_URL:-https://raw.githubusercontent.com/blockcast-network/beacon/main/docker-compose.yml}"
+REPO_URL="https://github.com/Blockcast/beacon-docker-compose.git"
 LOG_FILE="${WORK_DIR}/blockcast-deploy.log"
 
 # 日志函数
@@ -30,7 +30,7 @@ fi
 # 确保日志目录存在
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# 检查依赖项：Docker 和 Docker Compose
+# 检查依赖项：Docker、Docker Compose 和 Git
 check_dependencies() {
     log "检查 Docker 是否安装..."
     if ! command -v docker &> /dev/null; then
@@ -46,14 +46,29 @@ check_dependencies() {
         log "Docker 已安装，版本：$(docker --version)"
     fi
 
+    log "启动 Docker 服务..."
+    systemctl start docker
+    systemctl enable docker >/dev/null 2>&1
+    log "Docker 服务已启动"
+
     log "检查 Docker Compose 是否安装..."
     if ! command -v docker-compose &> /dev/null; then
         log "未找到 Docker Compose，正在安装..."
-        curl -L "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         chmod +x /usr/local/bin/docker-compose
         log "Docker Compose 安装完成，版本：$(docker-compose --version)"
     else
         log "Docker Compose 已安装，版本：$(docker-compose --version)"
+    fi
+
+    log "检查 Git 是否安装..."
+    if ! command -v git &> /dev/null; then
+        log "未找到 Git，正在安装..."
+        apt-get update
+        apt-get install -y git
+        log "Git 安装完成，版本：$(git --version)"
+    else
+        log "Git 已安装，版本：$(git --version)"
     fi
 }
 
@@ -67,14 +82,9 @@ validate_compose_file() {
         error "docker-compose.yml 文件为空或不存在"
     fi
     
-    # 检查文件是否包含 "404" 错误（简单检查）
-    if grep -qi "404" "$file"; then
-        error "下载的 docker-compose.yml 文件包含 404 错误，请检查 COMPOSE_URL: $COMPOSE_URL"
-    fi
-    
     # 检查是否为有效的 YAML 文件
     if ! docker-compose -f "$file" config >/dev/null 2>&1; then
-        error "docker-compose.yml 文件格式无效，请检查文件内容或 COMPOSE_URL: $COMPOSE_URL"
+        error "docker-compose.yml 文件格式无效，请检查文件内容"
     fi
     
     log "docker-compose.yml 文件验证通过"
@@ -88,27 +98,34 @@ deploy_blockcast() {
     mkdir -p "$WORK_DIR"
     cd "$WORK_DIR"
 
-    log "下载 Docker Compose 配置文件..."
-    if ! curl -L "$COMPOSE_URL" -o docker-compose.yml; then
-        error "无法下载 docker-compose.yml 文件，请检查网络或 COMPOSE_URL: $COMPOSE_URL"
+    log "克隆 Blockcast BEACON 代码库..."
+    if [ -d "beacon-docker-compose" ]; then
+        log "代码库目录已存在，更新代码..."
+        cd beacon-docker-compose
+        git pull origin main || error "无法更新代码库，请检查网络或仓库地址: $REPO_URL"
+    else
+        if ! git clone "$REPO_URL"; then
+            error "无法克隆代码库，请检查网络或仓库地址: $REPO_URL"
+        fi
+        cd beacon-docker-compose
     fi
 
-    # 验证下载的文件
+    # 验证 docker-compose.yml 文件
     validate_compose_file "docker-compose.yml"
 
     log "启动 Blockcast BEACON..."
-    if ! docker-compose up -d; then
-        error "启动 Docker Compose 失败，请检查 docker-compose.yml 文件或运行 'docker-compose logs' 查看详情"
+    if ! docker compose up -d; then
+        error "启动 Docker Compose 失败，请检查 docker-compose.yml 文件或运行 'docker compose logs' 查看详情"
     fi
 
     log "检查服务状态..."
     sleep 10
-    docker-compose ps
+    docker compose ps
 
     log "获取节点注册信息..."
-    REGISTRATION_INFO=$(docker-compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
+    REGISTRATION_INFO=$(docker compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
     if [ -z "$REGISTRATION_INFO" ]; then
-        error "无法获取注册信息，请检查日志：docker-compose logs blockcastd"
+        error "无法获取注册信息，请检查日志：docker compose logs blockcastd"
     else
         echo "$REGISTRATION_INFO" | tee -a "$LOG_FILE"
         log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
@@ -123,11 +140,11 @@ deploy_blockcast() {
 # 获取注册信息的函数
 get_registration_info() {
     log "获取节点注册信息..."
-    if [ -d "$WORK_DIR" ]; then
-        cd "$WORK_DIR"
-        REGISTRATION_INFO=$(docker-compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
+    if [ -d "$WORK_DIR/beacon-docker-compose" ]; then
+        cd "$WORK_DIR/beacon-docker-compose"
+        REGISTRATION_INFO=$(docker compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
         if [ -z "$REGISTRATION_INFO" ]; then
-            error "无法获取注册信息，请检查日志：docker-compose logs blockcastd"
+            error "无法获取注册信息，请检查日志：docker compose logs blockcastd"
         else
             echo "$REGISTRATION_INFO" | tee -a "$LOG_FILE"
             log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
@@ -141,10 +158,11 @@ get_registration_info() {
 # 清理 Blockcast BEACON 的函数
 clean_blockcast() {
     log "清理 Blockcast BEACON..."
-    if [ -d "$WORK_DIR" ]; then
-        cd "$WORK_DIR"
+    if [ -d "$WORK_DIR/beacon-docker-compose" ]; then
+        cd "$WORK_DIR/beacon-docker-compose"
         log "停止并删除容器..."
-        docker-compose down
+        docker compose down
+        cd "$WORK_DIR"
         log "删除工作目录：$WORK_DIR"
         rm -rf "$WORK_DIR"
         log "清理完成"
@@ -180,18 +198,18 @@ while true; do
             ;;
         2)
             log "检查节点状态..."
-            if [ -d "$WORK_DIR" ]; then
-                cd "$WORK_DIR"
-                docker-compose ps
+            if [ -d "$WORK_DIR/beacon-docker-compose" ]; then
+                cd "$WORK_DIR/beacon-docker-compose"
+                docker compose ps
             else
                 error "Blockcast BEACON 未部署，请先运行选项 1"
             fi
             ;;
         3)
             log "查看节点日志..."
-            if [ -d "$WORK_DIR" ]; then
-                cd "$WORK_DIR"
-                docker-compose logs
+            if [ -d "$WORK_DIR/beacon-docker-compose" ]; then
+                cd "$WORK_DIR/beacon-docker-compose"
+                docker compose logs
             else
                 error "Blockcast BEACON 未部署，请先运行选项 1"
             fi
