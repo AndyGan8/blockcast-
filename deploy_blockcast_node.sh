@@ -77,12 +77,10 @@ validate_compose_file() {
     local file="$1"
     log "验证 docker-compose.yml 文件..."
     
-    # 检查文件是否存在且不为空
     if [ ! -s "$file" ]; then
         error "docker-compose.yml 文件为空或不存在"
     fi
     
-    # 检查是否为有效的 YAML 文件
     if ! docker-compose -f "$file" config >/dev/null 2>&1; then
         error "docker-compose.yml 文件格式无效，请检查文件内容"
     fi
@@ -110,7 +108,6 @@ deploy_blockcast() {
         cd beacon-docker-compose
     fi
 
-    # 验证 docker-compose.yml 文件
     validate_compose_file "docker-compose.yml"
 
     log "启动 Blockcast BEACON..."
@@ -123,33 +120,22 @@ deploy_blockcast() {
     docker compose ps
 
     log "获取节点注册信息..."
-    REGISTRATION_INFO=$(docker compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
-    if [ -z "$REGISTRATION_INFO" ]; then
-        error "无法获取注册信息，请检查日志：docker compose logs blockcastd"
-    else
-        echo "$REGISTRATION_INFO" | tee -a "$LOG_FILE"
-        log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
-        log "您也可以直接访问 Registration URL 完成注册（需启用浏览器定位权限）。"
-    fi
-
-    log "Blockcast BEACON 部署完成！"
-    log "请访问 https://app.blockcast.network/manage-nodes 检查节点状态（健康状态可能需 6 小时后显示）。"
-    log "日志已保存至：$LOG_FILE"
+    get_registration_info
 }
 
-# 获取注册信息的函数
+# 获取注册信息的函数（修改部分）
 get_registration_info() {
     log "获取节点注册信息..."
     if [ -d "$WORK_DIR/beacon-docker-compose" ]; then
         cd "$WORK_DIR/beacon-docker-compose"
-        REGISTRATION_INFO=$(docker compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
-        if [ -z "$REGISTRATION_INFO" ]; then
-            error "无法获取注册信息，请检查日志：docker compose logs blockcastd"
-        else
-            echo "$REGISTRATION_INFO" | tee -a "$LOG_FILE"
-            log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
-            log "您也可以直接访问 Registration URL 完成注册（需启用浏览器定位权限）。"
+        log "执行 blockcastd init 获取 Hardware ID 和 Challenge Key..."
+        REGISTRATION_INFO=$(docker compose exec -T blockcastd blockcastd init 2>&1)
+        if [ $? -ne 0 ]; then
+            error "执行 'docker compose exec blockcastd blockcastd init' 失败，请检查日志：docker compose logs blockcastd"
         fi
+        echo "$REGISTRATION_INFO" | tee -a "$LOG_FILE"
+        log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
+        log "如果输出中包含 Registration URL，您也可以直接访问该 URL 完成注册（需启用浏览器定位权限）。"
     else
         error "Blockcast BEACON 未部署，请先运行选项 1 部署节点"
     fi
