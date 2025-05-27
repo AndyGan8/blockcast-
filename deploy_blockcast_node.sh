@@ -86,6 +86,24 @@ deploy_blockcast() {
     log "如需查看日志，运行：docker-compose logs"
 }
 
+# 获取注册信息的函数
+get_registration_info() {
+    log "获取节点注册信息..."
+    if [ -d "$HOME/blockcast-beacon" ]; then
+        cd "$HOME/blockcast-beacon"
+        REGISTRATION_INFO=$(docker-compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
+        if [ -z "$REGISTRATION_INFO" ]; then
+            error "无法获取注册信息，请检查日志：docker-compose logs blockcastd"
+        else
+            echo "$REGISTRATION_INFO"
+            log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
+            log "您也可以直接访问 Registration URL 完成注册（需启用浏览器定位权限）。"
+        fi
+    else
+        error "Blockcast BEACON 未部署，请先运行选项 1 部署节点"
+    fi
+}
+
 # 显示主菜单
 show_menu() {
     clear
@@ -95,9 +113,10 @@ show_menu() {
     echo "1. 部署 Blockcast BEACON 节点"
     echo "2. 查看节点状态"
     echo "3. 查看节点日志"
-    echo "4. 退出"
+    echo "4. 获取节点注册信息"
+    echo "5. 退出"
     echo "================================="
-    echo -n "请选择一个选项 [1-4]: "
+    echo -n "请选择一个选项 [1-5]: "
 }
 
 # 主循环
@@ -128,11 +147,14 @@ while true; do
             fi
             ;;
         4)
+            get_registration_info
+            ;;
+        5)
             log "退出程序"
             exit 0
             ;;
         *)
-            log "无效选项，请选择 1-4"
+            log "无效选项，请选择 1-5"
             ;;
     esac
     echo -n "按 Enter 键返回主菜单..."
