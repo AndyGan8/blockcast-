@@ -1,116 +1,140 @@
 #!/bin/bash
 
-# 脚本名称：deploy_blockcast_node.sh
+# Blockcast BEACON 一键部署与管理脚本
+# 适用于 Ubuntu/Debian 系统，需 root 权限运行
+# 参考文档：https://docs.blockcast.network/main
 
 # 设置错误处理：任何命令失败则退出
 set -e
 
-# 定义目录
-BLOCKCAST_DIR="beacon-docker-compose"
-
-# 打印信息函数
-print_info() {
-  echo -e "\033[1;34m$1\033[0m"
+# 日志函数
+log() {
+    echo "[INFO] $1"
 }
 
-# 安装并启动节点函数
-install_and_start_node() {
-  print_info "开始部署Blockcast节点..."
-
-  # 1. 启动Docker服务
-  print_info "启动Docker服务..."
-  sudo systemctl start docker
-  print_info "Docker服务已启动"
-
-  # 2. 克隆代码库
-  print_info "克隆代码库..."
-  if [ -d "$BLOCKCAST_DIR" ]; then
-    print_info "目录 $BLOCKCAST_DIR 已存在，跳过克隆"
-  else
-    git clone https://github.com/Blockcast/beacon-docker-compose.git
-  fi
-
-  # 3. 进入目录
-  print_info "进入 $BLOCKCAST_DIR 目录..."
-  cd "$BLOCKCAST_DIR"
-
-  # 4. 安装并运行节点
-  print_info "启动节点..."
-  docker compose up -d
-  print_info "节点已启动"
+error() {
+    echo "[ERROR] $1" >&2
+    exit 1
 }
 
-# 获取设备信息函数
-get_device_info() {
-  if [ -d "$BLOCKCAST_DIR" ] && [ -f "$BLOCKCAST_DIR/docker-compose.yml" ]; then
-    print_info "获取设备信息..."
-    print_info "正在执行 blockcastd init..."
-    cd "$BLOCKCAST_DIR"
-    docker compose exec -T blockcastd blockcastd init > device_info.txt
-    print_info "设备信息已保存到 $BLOCKCAST_DIR/device_info.txt"
-    print_info "请保存 Hardware ID 和 Challenge Key 用于节点注册。"
-    cd - >/dev/null
-  else
-    print_info "错误：未找到 $BLOCKCAST_DIR/docker-compose.yml 文件，请先安装并启动节点。"
-  fi
-  echo "按任意键返回主菜单..."
-  read -n 1
+# 检查是否以 root 权限运行
+if [ "$EUID" -ne 0 ]; then
+    error "请以 root 权限运行此脚本（使用 sudo）"
+fi
+
+# 部署 Blockcast BEACON 的函数
+deploy_blockcast() {
+    # 检查依赖项：Docker 和 Docker Compose
+    log "检查 Docker 是否安装..."
+    if ! command -v docker &> /dev/null; then
+        log "未找到 Docker，正在安装..."
+        apt-get update
+        apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+        add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+        apt-get update
+        apt-get install -y docker-ce
+        log "Docker 安装完成"
+    else
+        log "Docker 已安装"
+    fi
+
+    # 检查 Docker Compose
+    log "检查 Docker Compose 是否安装..."
+    if ! command -v docker-compose &> /dev/null; then
+        log "未找到 Docker Compose，正在安装..."
+        curl -L "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+        log "Docker Compose 安装完成"
+    else
+        log "Docker Compose 已安装"
+    fi
+
+    # 创建工作目录
+    WORK_DIR="$HOME/blockcast-beacon"
+    log "创建工作目录：$WORK_DIR"
+    mkdir -p "$WORK_DIR"
+    cd "$WORK_DIR"
+
+    # 下载 Blockcast BEACON 的 Docker Compose 配置文件
+    COMPOSE_URL="https://raw.githubusercontent.com/blockcast-network/beacon/main/docker-compose.yml"
+    log "下载 Docker Compose 配置文件..."
+    curl -L "$COMPOSE_URL" -o docker-compose.yml || error "无法下载 docker-compose.yml 文件"
+
+    # 启动 Blockcast BEACON
+    log "启动 Blockcast BEACON..."
+    docker-compose up -d || error "启动 Docker Compose 失败"
+
+    # 检查服务状态
+    log "检查服务状态..."
+    sleep 10
+    docker-compose ps
+
+    # 获取注册信息
+    log "获取节点注册信息..."
+    REGISTRATION_INFO=$(docker-compose logs blockcastd | grep -E "Hardware ID|Challenge Key|Registration URL")
+    if [ -z "$REGISTRATION_INFO" ]; then
+        error "无法获取注册信息，请检查日志：docker-compose logs blockcastd"
+    else
+        echo "$REGISTRATION_INFO"
+        log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
+        log "您也可以直接访问 Registration URL 完成注册（需启用浏览器定位权限）。"
+    fi
+
+    log "Blockcast BEACON 部署完成！"
+    log "请访问 https://app.blockcast.network/manage-nodes 检查节点状态（健康状态可能需 6 小时后显示）。"
+    log "如需查看日志，运行：docker-compose logs"
 }
 
-# 查看节点日志函数
-view_node_logs() {
-  if [ -d "$BLOCKCAST_DIR" ] && [ -f "$BLOCKCAST_DIR/docker-compose.yml" ]; then
-    print_info "查看节点日志..."
-    cd "$BLOCKCAST_DIR"
-    docker logs -f blockcastd
-    cd - >/dev/null
-  else
-    print_info "错误：未找到 $BLOCKCAST_DIR/docker-compose.yml 文件，请先安装并启动节点。"
-  fi
-  echo "按任意键返回主菜单..."
-  read -n 1
-}
-
-# 主菜单函数
-main_menu() {
-  while true; do
+# 显示主菜单
+show_menu() {
     clear
-    print_info "Blockcast 节点管理脚本"
-    echo "1. 安装并启动节点"
-    echo "2. 查看节点日志"
-    echo "3. 获取设备信息"
+    echo "================================="
+    echo "       Blockcast 主菜单         "
+    echo "================================="
+    echo "1. 部署 Blockcast BEACON 节点"
+    echo "2. 查看节点状态"
+    echo "3. 查看节点日志"
     echo "4. 退出"
-    read -p "请输入选项 (1-4): " choice
-
-    case $choice in
-      1)
-        install_and_start_node
-        echo "按任意键返回主菜单..."
-        read -n 1
-        cd - >/dev/null 2>/dev/null || true # 返回原目录，忽略错误
-        ;;
-      2)
-        view_node_logs
-        ;;
-      3)
-        get_device_info
-        ;;
-      4)
-        print_info "退出脚本..."
-        exit 0
-        ;;
-      *)
-        print_info "无效选项，请输入 1-4。"
-        echo "按任意键返回主菜单..."
-        read -n 1
-        ;;
-    esac
-  done
+    echo "================================="
+    echo -n "请选择一个选项 [1-4]: "
 }
 
-# 检查依赖
-command -v docker >/dev/null 2>&1 || { print_info "错误：Docker 未安装，请先安装 Docker。"; exit 1; }
-command -v git >/dev/null 2>&1 || { print_info "错误：Git 未安装，请先安装 Git。"; exit 1; }
-
-# 执行主菜单
-main_menu
+# 主循环
+while true; do
+    show_menu
+    read choice
+    case $choice in
+        1)
+            log "开始部署 Blockcast BEACON 节点..."
+            deploy_blockcast
+            ;;
+        2)
+            log "检查节点状态..."
+            if [ -d "$HOME/blockcast-beacon" ]; then
+                cd "$HOME/blockcast-beacon"
+                docker-compose ps
+            else
+                error "Blockcast BEACON 未部署，请先运行选项 1"
+            fi
+            ;;
+        3)
+            log "查看节点日志..."
+            if [ -d "$HOME/blockcast-beacon" ]; then
+                cd "$HOME/blockcast-beacon"
+                docker-compose logs
+            else
+                error "Blockcast BEACON 未部署，请先运行选项 1"
+            fi
+            ;;
+        4)
+            log "退出程序"
+            exit 0
+            ;;
+        *)
+            log "无效选项，请选择 1-4"
+            ;;
+    esac
+    echo -n "按 Enter 键返回主菜单..."
+    read
+done
