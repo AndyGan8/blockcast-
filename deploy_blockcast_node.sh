@@ -88,6 +88,34 @@ validate_compose_file() {
     log "docker-compose.yml 文件验证通过"
 }
 
+# 检查并创建缺失的配置文件
+check_config_files() {
+    log "检查必要的配置文件..."
+    cd "$WORK_DIR/beacon-docker-compose"
+    
+    # 检查 gateway.mconfig
+    GATEWAY_CONFIG="/var/opt/magma/configs/gateway.mconfig"
+    if ! docker compose exec -T blockcastd test -f "$GATEWAY_CONFIG" >/dev/null 2>&1; then
+        log "未找到 $GATEWAY_CONFIG，正在创建默认配置文件..."
+        docker compose exec -T blockcastd mkdir -p /var/opt/magma/configs
+        docker compose exec -T blockcastd bash -c "echo '{}' > $GATEWAY_CONFIG" || error "无法创建 $GATEWAY_CONFIG"
+        log "已创建默认 $GATEWAY_CONFIG"
+    else
+        log "$GATEWAY_CONFIG 已存在"
+    fi
+
+    # 检查 beacond.yml
+    BEACOND_CONFIG="/etc/magma/cdn/beacond.yml"
+    if ! docker compose exec -T beacond test -f "$BEACOND_CONFIG" >/dev/null 2>&1; then
+        log "未找到 $BEACOND_CONFIG，正在创建默认配置文件..."
+        docker compose exec -T beacond mkdir -p /etc/magma/cdn
+        docker compose exec -T beacond bash -c "echo '{}' > $BEACOND_CONFIG" || error "无法创建 $BEACOND_CONFIG"
+        log "已创建默认 $BEACOND_CONFIG"
+    else
+        log "$BEACOND_CONFIG 已存在"
+    fi
+}
+
 # 部署 Blockcast BEACON 的函数
 deploy_blockcast() {
     check_dependencies
@@ -119,23 +147,35 @@ deploy_blockcast() {
     sleep 10
     docker compose ps
 
+    log "检查并创建必要的配置文件..."
+    check_config_files
+
     log "获取节点注册信息..."
     get_registration_info
 }
 
-# 获取注册信息的函数（修改部分）
+# 获取注册信息的函数（优化部分）
 get_registration_info() {
     log "获取节点注册信息..."
     if [ -d "$WORK_DIR/beacon-docker-compose" ]; then
         cd "$WORK_DIR/beacon-docker-compose"
         log "执行 blockcastd init 获取 Hardware ID 和 Challenge Key..."
-        REGISTRATION_INFO=$(docker compose exec -T blockcastd blockcastd init 2>&1)
-        if [ $? -ne 0 ]; then
-            error "执行 'docker compose exec blockcastd blockcastd init' 失败，请检查日志：docker compose logs blockcastd"
-        fi
-        echo "$REGISTRATION_INFO" | tee -a "$LOG_FILE"
-        log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
-        log "如果输出中包含 Registration URL，您也可以直接访问该 URL 完成注册（需启用浏览器定位权限）。"
+        
+        # 重试机制，最多尝试 3 次，每次间隔 5 秒
+        RETRY_COUNT=3
+        for ((i=1; i<=RETRY_COUNT; i++)); do
+            REGISTRATION_INFO=$(docker compose exec -T blockcastd blockcastd init 2>&1)
+            if [ $? -eq 0 ]; then
+                echo "$REGISTRATION_INFO" | tee -a "$LOG_FILE"
+                log "请使用上述 Hardware ID 和 Challenge Key 在 Blockcast 管理门户（https://app.blockcast.network）上注册您的节点。"
+                log "如果输出中包含 Registration URL，您也可以直接访问该 URL 完成注册（需启用浏览器定位权限）。"
+                return 0
+            else
+                log "第 $i 次尝试执行 'blockcastd init' 失败，重试中..."
+                sleep 5
+            fi
+        done
+        error "执行 'docker compose exec blockcastd blockcastd init' 失败，请检查日志：docker compose logs blockcastd"
     else
         error "Blockcast BEACON 未部署，请先运行选项 1 部署节点"
     fi
