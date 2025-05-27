@@ -11,6 +11,7 @@ set -e
 WORK_DIR="${BLOCKCAST_WORK_DIR:-$HOME/blockcast-beacon}"
 REPO_URL="https://github.com/Blockcast/beacon-docker-compose.git"
 LOG_FILE="${WORK_DIR}/blockcast-deploy.log"
+IMAGE_VERSION="${IMAGE_VERSION:-stable}"  # 默认使用稳定版镜像
 
 # 日志函数
 log() {
@@ -88,11 +89,36 @@ validate_compose_file() {
     log "docker-compose.yml 文件验证通过"
 }
 
+# 检查网络连通性
+check_network() {
+    log "检查网络连通性..."
+    if ! ping -c 3 app.blockcast.network >/dev/null 2>&1; then
+        log "警告：无法 ping 通 app.blockcast.network，可能存在网络问题"
+    else
+        log "网络连通性正常：app.blockcast.network 可达"
+    fi
+
+    if ! curl -s -I https://app.blockcast.network >/dev/null; then
+        log "警告：无法访问 https://app.blockcast.network，请检查网络或防火墙设置"
+    else
+        log "HTTPS 连接正常：app.blockcast.network 可达"
+    fi
+}
+
 # 检查并创建缺失的配置文件
 check_config_files() {
     log "检查必要的配置文件..."
     cd "$WORK_DIR/beacon-docker-compose"
     
+    # 检查 device_info.txt
+    DEVICE_INFO="$WORK_DIR/beacon-docker-compose/device_info.txt"
+    if [ ! -f "$DEVICE_INFO" ]; then
+        log "未找到 device_info.txt，尝试运行 blockcastd init 生成..."
+        get_registration_info
+    else
+        log "device_info.txt 已存在：$DEVICE_INFO"
+    fi
+
     # 检查 gateway.mconfig
     GATEWAY_CONFIG="/var/opt/magma/configs/gateway.mconfig"
     if ! docker compose exec -T blockcastd test -f "$GATEWAY_CONFIG" >/dev/null 2>&1; then
@@ -119,6 +145,7 @@ check_config_files() {
 # 部署 Blockcast BEACON 的函数
 deploy_blockcast() {
     check_dependencies
+    check_network
 
     log "创建工作目录：$WORK_DIR"
     mkdir -p "$WORK_DIR"
@@ -138,6 +165,9 @@ deploy_blockcast() {
 
     validate_compose_file "docker-compose.yml"
 
+    log "设置镜像版本为：${IMAGE_VERSION}"
+    export IMAGE_VERSION="${IMAGE_VERSION}"
+
     log "启动 Blockcast BEACON..."
     if ! docker compose up -d; then
         error "启动 Docker Compose 失败，请检查 docker-compose.yml 文件或运行 'docker compose logs' 查看详情"
@@ -154,7 +184,7 @@ deploy_blockcast() {
     get_registration_info
 }
 
-# 获取注册信息的函数（优化部分）
+# 获取注册信息的函数
 get_registration_info() {
     log "获取节点注册信息..."
     if [ -d "$WORK_DIR/beacon-docker-compose" ]; then
