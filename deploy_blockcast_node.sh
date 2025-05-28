@@ -71,6 +71,26 @@ view_node_logs() {
   read -n 1
 }
 
+# 删除容器和文件函数
+delete_node() {
+  if [ -d "$BLOCKCAST_DIR" ] && [ -f "$BLOCKCAST_DIR/docker-compose.yml" ]; then
+    print_info "正在删除Blockcast节点和相关文件..."
+    cd "$BLOCKCAST_DIR"
+    # 停止并删除容器
+    print_info "停止并删除Docker容器..."
+    docker compose down
+    # 删除目录及其内容
+    print_info "删除 $BLOCKCAST_DIR 目录及其内容..."
+    cd ..
+    rm -rf "$BLOCKCAST_DIR"
+    print_info "Blockcast节点和相关文件已删除"
+  else
+    print_info "错误：未找到 $BLOCKCAST_DIR/docker-compose.yml 文件，无需删除。"
+  fi
+  echo "按任意键返回主菜单..."
+  read -n 1
+}
+
 # 主菜单函数
 main_menu() {
   while true; do
@@ -79,8 +99,9 @@ main_menu() {
     echo "1. 安装并启动节点"
     echo "2. 查看节点日志"
     echo "3. 获取设备信息"
-    echo "4. 退出"
-    read -p "请输入选项 (1-4): " choice
+    echo "4. 删除容器和文件"
+    echo "5. 退出"
+    read -p "请输入选项 (1-5): " choice
 
     case $choice in
       1)
@@ -96,11 +117,14 @@ main_menu() {
         get_device_info
         ;;
       4)
+        delete_node
+        ;;
+      5)
         print_info "退出脚本..."
         exit 0
         ;;
       *)
-        print_info "无效选项，请输入 1-4。"
+        print_info "无效选项，请输入 1-5。"
         echo "按任意键返回主菜单..."
         read -n 1
         ;;
